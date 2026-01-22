@@ -1,0 +1,15 @@
+# Pastas do Sistema e IDE
+.vscode
+.idea
+__pycache__
+*.pyc
+
+# Python (Backend)
+backend/venv/
+backend/uploads/
+*.env
+
+# Node (Frontend - caso tenha)
+node_modules/
+dist/
+build/

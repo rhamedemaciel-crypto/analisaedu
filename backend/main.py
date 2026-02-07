@@ -5,17 +5,18 @@ from sqlalchemy.orm import Session
 import shutil
 import os
 import uuid
-import traceback # Para ver os detalhes do erro
+import traceback
 import models
 import database
-import vision
 
-# Cria as tabelas
+# Importa os DOIS módulos de visão
+import vision      # Seu código de contornos (Gabarito 89/90)
+import vision_ocr  # O novo código de IA (Redação)
+
 models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
 
-# --- CORS LIBERADO GERAL ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -36,74 +37,80 @@ def get_db():
 
 @app.get("/")
 def read_root():
-    return {"status": "Online"}
+    return {"status": "Online", "sistema": "AnalisaEdu Híbrido"}
 
-# --- ROTA DE EMERGÊNCIA: CRIAR ALUNO ---
-@app.get("/criar-aluno")
-def criar_aluno_teste(db: Session = Depends(get_db)):
-    # Verifica se o aluno 1 já existe
-    aluno = db.query(models.Aluno).filter(models.Aluno.id == 1).first()
-    if aluno:
-        return {"mensagem": "O Aluno 1 já existe! Pode enviar a prova."}
-    
-    # Se não existe, cria ele
-    novo_aluno = models.Aluno(id=1, nome="João da Silva", matricula="2026001")
-    db.add(novo_aluno)
-    db.commit()
-    return {"mensagem": "✅ Aluno 1 criado com sucesso! Agora tente enviar a prova."}
-
-@app.post("/enviar-prova/{aluno_id}")
-def enviar_prova(aluno_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    print(f"\n📢 [PASSO 1] Recebido pedido para aluno {aluno_id}")
+# --- ROTA A: GABARITO (Usa seu vision.py estável) ---
+@app.post("/enviar-gabarito/{aluno_id}")
+def enviar_gabarito(aluno_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    print(f"\nQw [ROTA A] GABARITO para aluno {aluno_id}")
     
     try:
-        # 1. Salvar arquivo
         extensao = file.filename.split(".")[-1]
-        nome_arquivo = f"{uuid.uuid4()}.{extensao}"
+        nome_arquivo = f"gabarito_{uuid.uuid4()}.{extensao}"
         caminho_arquivo = f"uploads/{nome_arquivo}"
         
-        # Caminho absoluto para evitar erros de pasta
-        caminho_absoluto = os.path.abspath(caminho_arquivo)
-
-        print(f"📂 [PASSO 2] Salvando arquivo em: {caminho_absoluto}")
-
         with open(caminho_arquivo, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 2. Visão Computacional
-        print("👀 [PASSO 3] Chamando o robô de visão...")
-        
-        # --- AQUI É ONDE GERALMENTE DÁ ERRO ---
+        # Chama seu algoritmo de contornos
         resultado = vision.processar_imagem_para_leitura(caminho_arquivo)
         
-        # Verificação de segurança: O robô devolveu o que a gente espera?
-        if not resultado or len(resultado) != 2:
-             print("❌ [ERRO] O vision.py retornou algo estranho:", resultado)
-             raise Exception("Erro interno no módulo de visão")
+        # O seu vision.py retorna (caminho_proc, mensagem_string)
+        if not resultado:
+             raise Exception("Erro no processamento da imagem")
 
-        caminho_proc, status_visao = resultado
-        print(f"✅ [PASSO 4] Visão concluiu: {status_visao}")
+        caminho_proc, msg_status = resultado
 
-        # 3. Banco de Dados
         nova_resposta = models.Resposta(
             aluno_id=aluno_id,
-            url_foto_cartao=caminho_arquivo
+            url_foto_cartao=caminho_arquivo,
+            respostas_identificadas={"tipo": "gabarito", "status": msg_status}
         )
         db.add(nova_resposta)
         db.commit()
-        db.refresh(nova_resposta)
-        print("💾 [PASSO 5] Salvo no banco de dados!")
 
         return {
-            "mensagem": "Sucesso total!",
+            "mensagem": "Gabarito processado!",
             "arquivo_processado": os.path.basename(caminho_proc),
-            "status_visao": status_visao
+            "info": msg_status,
+            "tipo": "gabarito"
         }
-    
 
     except Exception as e:
-        # Se der erro, ele vai imprimir o motivo exato no terminal
-        print("\n❌❌❌ ERRO GRAVE NO SERVIDOR ❌❌❌")
-        traceback.print_exc() # Imprime o erro vermelho detalhado
-        # Devolve o erro pro site em vez de explodir
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- ROTA B: REDAÇÃO (Usa a IA do Google) ---
+@app.post("/enviar-redacao/{aluno_id}")
+def enviar_redacao(aluno_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    print(f"\n📝 [ROTA B] REDAÇÃO para aluno {aluno_id}")
+    
+    try:
+        extensao = file.filename.split(".")[-1]
+        nome_arquivo = f"redacao_{uuid.uuid4()}.{extensao}"
+        caminho_arquivo = f"uploads/{nome_arquivo}"
+        
+        with open(caminho_arquivo, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # Chama a IA
+        texto_transcrito = vision_ocr.processar_redacao(caminho_arquivo)
+
+        nova_resposta = models.Resposta(
+            aluno_id=aluno_id,
+            url_foto_redacao=caminho_arquivo,
+            respostas_identificadas={"tipo": "redacao", "texto": texto_transcrito}
+        )
+        db.add(nova_resposta)
+        db.commit()
+
+        return {
+            "mensagem": "Redação transcrita!",
+            "arquivo_original": nome_arquivo,
+            "texto_transcrito": texto_transcrito,
+            "tipo": "redacao"
+        }
+
+    except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

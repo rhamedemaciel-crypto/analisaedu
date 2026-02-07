@@ -3,127 +3,89 @@ import numpy as np
 import os
 
 def processar_imagem_para_leitura(caminho_arquivo_original):
-    print(f"👀 [Vision] Modo Grid Matemático: {caminho_arquivo_original}")
+    print(f"👀 [Vision] Modo Seguro + Filtro Geométrico: {caminho_arquivo_original}")
     
     img = cv2.imread(caminho_arquivo_original)
     if img is None: return None, "Erro leitura"
 
-    # 1. Redimensionamento Seguro (1200px é suficiente e rápido)
-    h_orig, w_orig = img.shape[:2]
+    # 1. Redimensionamento Seguro
+    altura, largura = img.shape[:2]
     fator = 1
-    if w_orig > 1200:
-        fator = 1200 / w_orig
+    if largura > 1200:
+        fator = 1200 / largura
         img = cv2.resize(img, (0, 0), fx=fator, fy=fator)
     
-    h, w = img.shape[:2]
-    img_final = img.copy()
+    area_imagem_total = img.shape[0] * img.shape[1]
 
-    # 2. Binarização Simples (Invertida: Tinta = Branco, Papel = Preto)
+    # 2. Tratamento (O Clássico que funciona)
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    img_blur = cv2.GaussianBlur(img_gray, (5, 5), 0)
     
-    # Threshold Adaptativo (Melhor que o global para iluminação irregular)
-    img_bin = cv2.adaptiveThreshold(
-        img_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 4
+    img_binaria = cv2.adaptiveThreshold(
+        img_blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 19, 5
     )
 
-    # 3. PROJEÇÃO VERTICAL (Achar Colunas)
-    # Somamos os pixels brancos de cada coluna
-    proj_vert = np.sum(img_bin, axis=0)
-    
-    # Normalizamos para facilitar a detecção (0 a 1)
-    proj_vert_norm = proj_vert / np.max(proj_vert)
-    
-    # Filtro: Onde tem "bastante" tinta verticalmente?
-    # Colunas de gabarito são picos densos.
-    colunas_mask = proj_vert_norm > 0.20 # 20% da densidade máxima
-    
-    # Achar intervalos (início e fim de cada coluna)
-    colunas_intervals = []
-    dentro = False
-    start = 0
-    for i, val in enumerate(colunas_mask):
-        if val and not dentro:
-            dentro = True
-            start = i
-        elif not val and dentro:
-            dentro = False
-            # Filtro de largura: Uma coluna deve ter entre 50px e 400px
-            largura = i - start
-            if 50 < largura < 400:
-                colunas_intervals.append((start, i))
+    # Limpeza (Mantida pois estabiliza a imagem)
+    kernel = np.ones((3,3), np.uint8)
+    img_binaria = cv2.erode(img_binaria, kernel, iterations=1)
+    img_binaria = cv2.dilate(img_binaria, kernel, iterations=2)
 
-    print(f"📊 Colunas detectadas: {len(colunas_intervals)}")
+    # 3. Detectar (RETR_TREE)
+    contornos, hierarchy = cv2.findContours(img_binaria, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-    # 4. PROJEÇÃO HORIZONTAL (Achar Linhas DENTRO das Colunas)
-    respostas_encontradas = 0
+    img_final = img.copy()
+    contador_bolinhas = 0
+
+    # --- AJUSTES FINAIS ---
+    # Baixamos a densidade para salvar a 105
+    MIN_DENSIDADE = 0.70
+    # Mantemos circularidade média
+    MIN_CIRCULARIDADE = 0.60
     
-    for (x1, x2) in colunas_intervals:
-        # Desenha a caixa da coluna (Azul)
-        cv2.rectangle(img_final, (x1, 0), (x2, h), (255, 0, 0), 2)
+    for cnt in contornos:
+        area = cv2.contourArea(cnt)
+        perimetro = cv2.arcLength(cnt, True)
         
-        # Recorta a coluna para analisar as linhas
-        fatia = img_bin[:, x1:x2]
-        
-        # Soma Horizontal (axis=1) para achar onde estão as questões
-        proj_horiz = np.sum(fatia, axis=1)
-        proj_horiz_norm = proj_horiz / np.max(proj_horiz)
-        
-        linhas_mask = proj_horiz_norm > 0.10 # Linhas tem menos tinta que colunas
-        
-        # Achar intervalos das linhas (Questões)
-        linhas_intervals = []
-        dentro_linha = False
-        start_y = 0
-        for j, val_y in enumerate(linhas_mask):
-            if val_y and not dentro_linha:
-                dentro_linha = True
-                start_y = j
-            elif not val_y and dentro_linha:
-                dentro_linha = False
-                altura = j - start_y
-                # Filtro: Uma linha de questão tem altura específica (~15 a 60px)
-                if 15 < altura < 80:
-                    linhas_intervals.append((start_y, j))
+        # Proteção contra divisão por zero (Isso evita travar o servidor)
+        if perimetro == 0 or area == 0: continue
 
-        # AGORA TEMOS O GRID: Cruzamento de (x1, x2) com (y1, y2)
-        # Mas dentro desse cruzamento tem 5 letras (A, B, C, D, E)
-        # Vamos dividir esse retângulo em 5 pedaços iguais matematicamente.
+        # Filtro de tamanho
+        if area < 100 or area > 5000: continue
+
+        (x, y, w, h) = cv2.boundingRect(cnt)
         
-        for (y1, y2) in linhas_intervals:
-            # Largura total da linha
-            largura_total = x2 - x1
-            largura_opcao = largura_total / 5 # Divide em 5 (A, B, C, D, E)
+        # --- PROTEÇÃO CONTRA FANTASMAS: ASPECT RATIO ---
+        # Bolinhas devem caber num quadrado (largura ~= altura)
+        # Se a largura for muito diferente da altura (> 20% de diferença), é lixo.
+        aspect_ratio = float(w) / h
+        if aspect_ratio < 0.8 or aspect_ratio > 1.2:
+            continue # Pula para o próximo (ignora letras compridas)
+
+        # Cálculos normais
+        porcentagem_area = (area / area_imagem_total) * 100
+        circularidade = (4 * np.pi * area) / (perimetro ** 2)
+        
+        roi = img_binaria[y:y+h, x:x+w]
+        pixels_brancos = cv2.countNonZero(roi)
+        densidade = pixels_brancos / (w * h)
+
+        # Regras
+        passou_tamanho = 0.05 < porcentagem_area < 2.0
+        passou_forma = circularidade > MIN_CIRCULARIDADE
+        passou_densidade = densidade > MIN_DENSIDADE
+
+        if passou_tamanho and passou_forma and passou_densidade:
+            # SUCESSO (Verde)
+            cv2.rectangle(img_final, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            contador_bolinhas += 1
             
-            melhor_densidade = 0
-            melhor_opcao_x = -1
-            
-            for k in range(5):
-                # Coordenadas da "Caixinha" da letra
-                box_x1 = int(x1 + (k * largura_opcao))
-                box_x2 = int(x1 + ((k+1) * largura_opcao))
-                
-                # Margem de segurança (para não pegar a borda)
-                margin = 4
-                roi = img_bin[y1+margin:y2-margin, box_x1+margin:box_x2-margin]
-                
-                # Mede a tinta aqui
-                if roi.size == 0: continue
-                densidade = cv2.countNonZero(roi) / roi.size
-                
-                # Desenha o Grid (Amarelo fraquinho)
-                cv2.rectangle(img_final, (box_x1, y1), (box_x2, y2), (0, 255, 255), 1)
-                
-                # VERIFICAÇÃO DE RESPOSTA
-                # Se tiver mais de 45% de tinta, é uma marcação
-                if densidade > 0.45:
-                    cv2.rectangle(img_final, (box_x1, y1), (box_x2, y2), (0, 255, 0), 2)
-                    # cv2.putText(img_final, f"{densidade:.2f}", (box_x1, y1-2), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0,255,0), 1)
-                    respostas_encontradas += 1
+            # Debug: Mostra o valor pra gente ter certeza
+            # cv2.putText(img_final, f"{densidade:.2f}", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,255,0), 1)
 
-    print(f"🟢 Total Grid: {respostas_encontradas}")
+    print(f"🟢 Resultado Seguro: {contador_bolinhas} detectadas.")
 
     pasta, nome_arquivo = os.path.split(caminho_arquivo_original)
     caminho_final = os.path.join(pasta, f"proc_{nome_arquivo}")
     cv2.imwrite(caminho_final, img_final)
     
-    return caminho_final, f"Grid leu {respostas_encontradas}"
+    return caminho_final, f"Leu {contador_bolinhas} gabaritos"

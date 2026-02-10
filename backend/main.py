@@ -44,6 +44,29 @@ def get_db():
 def read_root():
     return {"status": "Online", "sistema": "AnalisaEdu - Núcleo SAEV Municipal"}
 
+# --- ROTAS DE INFRAESTRUTURA (CONSULTAS PARA O FRONTEND) ---
+
+@app.get("/instituicao")
+def obter_instituicao(db: Session = Depends(get_db)):
+    # Retorna a primeira (e única, por enquanto) prefeitura
+    return db.query(models.Instituicao).first()
+
+@app.get("/escolas")
+def listar_escolas(db: Session = Depends(get_db)):
+    return db.query(models.Escola).all()
+
+@app.get("/turmas/{escola_id}")
+def listar_turmas(escola_id: int, db: Session = Depends(get_db)):
+    return db.query(models.Turma).filter(models.Turma.escola_id == escola_id).all()
+
+@app.get("/alunos/{turma_id}")
+def listar_alunos(turma_id: int, db: Session = Depends(get_db)):
+    return db.query(models.Aluno).filter(models.Aluno.turma_id == turma_id).all()
+
+@app.get("/avaliacoes/{turma_id}")
+def listar_avaliacoes(turma_id: int, db: Session = Depends(get_db)):
+    return db.query(models.Avaliacao).filter(models.Avaliacao.turma_id == turma_id).all()
+
 # --- ROTA A: CORREÇÃO OBJETIVA (GABARITO) ---
 # Mudança: Agora exigimos 'avaliacao_id' para saber de qual prova é esse cartão
 @app.post("/enviar-gabarito/{aluno_id}")
@@ -155,6 +178,7 @@ def enviar_redacao(
             "prova": avaliacao.nome,
             "texto_identificado": texto_transcrito
         }
+    
 
     except Exception as e:
         traceback.print_exc()

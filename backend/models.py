@@ -57,12 +57,15 @@ class Resposta(Base):
     avaliacao_id = Column(Integer, ForeignKey("avaliacoes.id"))
     aluno_id = Column(Integer, ForeignKey("alunos.id"))
     
-    url_foto_redacao = Column(String, nullable=True)
+    # --- MUDANÇA AQUI: Campos separados para cada tipo de prova ---
+    url_foto_redacao = Column(String, nullable=True) # Para uploads de Redação
+    url_foto_cartao = Column(String, nullable=True)  # Para uploads de Gabarito (OMR)
+    
     texto_transcrito = Column(Text, nullable=True) # O que a IA leu
     status = Column(String, default="pendente")
     
     nota_final = Column(Float, default=0.0)
-    resultado_correcao = Column(JSON, nullable=True) # O detalhe da nota
+    resultado_correcao = Column(JSON, nullable=True) # O detalhe da nota (questões ou feedback da IA)
     
     aluno = relationship("Aluno")
     avaliacao = relationship("Avaliacao")

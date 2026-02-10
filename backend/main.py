@@ -28,7 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Monta a pasta de uploads para ser acessível via URL (ex: http://localhost:8000/imagens/foto.jpg)
+# Monta a pasta de uploads para ser acessível via URL
 os.makedirs("uploads", exist_ok=True)
 app.mount("/imagens", StaticFiles(directory="uploads"), name="imagens")
 
@@ -48,7 +48,6 @@ def read_root():
 
 @app.get("/instituicao")
 def obter_instituicao(db: Session = Depends(get_db)):
-    # Retorna a primeira (e única, por enquanto) prefeitura
     return db.query(models.Instituicao).first()
 
 @app.get("/escolas")
@@ -68,17 +67,16 @@ def listar_avaliacoes(turma_id: int, db: Session = Depends(get_db)):
     return db.query(models.Avaliacao).filter(models.Avaliacao.turma_id == turma_id).all()
 
 # --- ROTA A: CORREÇÃO OBJETIVA (GABARITO) ---
-# Mudança: Agora exigimos 'avaliacao_id' para saber de qual prova é esse cartão
 @app.post("/enviar-gabarito/{aluno_id}")
 def enviar_gabarito(
     aluno_id: int, 
-    avaliacao_id: int = Form(...), # Novo campo obrigatório
+    avaliacao_id: int = Form(...), 
     file: UploadFile = File(...), 
     db: Session = Depends(get_db)
 ):
     print(f"\nQw [ROTA A] GABARITO | Aluno: {aluno_id} | Prova: {avaliacao_id}")
     
-    # 1. Validação de Segurança (O aluno e a prova existem?)
+    # 1. Validação de Segurança
     aluno = db.query(models.Aluno).filter(models.Aluno.id == aluno_id).first()
     avaliacao = db.query(models.Avaliacao).filter(models.Avaliacao.id == avaliacao_id).first()
     
@@ -96,8 +94,7 @@ def enviar_gabarito(
         with open(caminho_arquivo, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 3. Processamento (Seu código 'vision.py')
-        # vision.processar... retorna (caminho_imagem_processada, resultado_texto)
+        # 3. Processamento (Vision)
         resultado = vision.processar_imagem_para_leitura(caminho_arquivo)
         
         if not resultado:
@@ -105,13 +102,12 @@ def enviar_gabarito(
 
         caminho_proc, msg_status = resultado
 
-        # 4. Gravação no Banco (Modelo Novo)
+        # 4. Gravação no Banco
         nova_resposta = models.Resposta(
             aluno_id=aluno_id,
-            avaliacao_id=avaliacao_id, # Vinculo institucional
-            url_foto_cartao=caminho_arquivo,
+            avaliacao_id=avaliacao_id,
+            url_foto_cartao=caminho_arquivo, # Campo correto para gabarito
             status="corrigido_automatico",
-            # Salvamos o resultado técnico no JSON para auditoria
             resultado_correcao={"tipo": "gabarito_omr", "dados_cv": msg_status} 
         )
         
@@ -121,7 +117,7 @@ def enviar_gabarito(
         return {
             "mensagem": "Gabarito processado com sucesso!",
             "aluno": aluno.nome,
-            "escola": aluno.turma.escola.nome, # Mostrando que o sistema conhece a escola
+            "escola": aluno.turma.escola.nome,
             "arquivo_debug": os.path.basename(caminho_proc),
             "resultado_bruto": msg_status
         }
@@ -135,13 +131,12 @@ def enviar_gabarito(
 @app.post("/enviar-redacao/{aluno_id}")
 def enviar_redacao(
     aluno_id: int, 
-    avaliacao_id: int = Form(...), # Novo campo obrigatório
+    avaliacao_id: int = Form(...),
     file: UploadFile = File(...), 
     db: Session = Depends(get_db)
 ):
     print(f"\n📝 [ROTA B] REDAÇÃO | Aluno: {aluno_id} | Prova: {avaliacao_id}")
     
-    # 1. Validação
     aluno = db.query(models.Aluno).filter(models.Aluno.id == aluno_id).first()
     avaliacao = db.query(models.Avaliacao).filter(models.Avaliacao.id == avaliacao_id).first()
     
@@ -149,7 +144,6 @@ def enviar_redacao(
         raise HTTPException(404, "Aluno ou Avaliação não encontrados.")
 
     try:
-        # 2. Salvar Arquivo
         extensao = file.filename.split(".")[-1]
         nome_arquivo = f"redacao_prova{avaliacao_id}_aluno{aluno_id}_{uuid.uuid4()}.{extensao}"
         caminho_arquivo = f"uploads/{nome_arquivo}"
@@ -157,15 +151,13 @@ def enviar_redacao(
         with open(caminho_arquivo, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 3. Processamento IA (Seu código 'vision_ocr.py')
         texto_transcrito = vision_ocr.processar_redacao(caminho_arquivo)
 
-        # 4. Gravação no Banco (Modelo Novo)
         nova_resposta = models.Resposta(
             aluno_id=aluno_id,
             avaliacao_id=avaliacao_id,
-            url_foto_redacao=caminho_arquivo,
-            texto_transcrito=texto_transcrito, # Campo específico para texto
+            url_foto_redacao=caminho_arquivo, # Campo correto para redação
+            texto_transcrito=texto_transcrito,
             status="transcrito_aguardando_correcao"
         )
         
@@ -178,8 +170,13 @@ def enviar_redacao(
             "prova": avaliacao.nome,
             "texto_identificado": texto_transcrito
         }
-    
 
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- ROTA C: LISTAR RESULTADOS (Necessária para a Tabela) ---
+@app.get("/respostas")
+def listar_todas_respostas(db: Session = Depends(get_db)):
+    # Retorna as últimas 10 respostas, das mais novas para as mais antigas
+    return db.query(models.Resposta).order_by(models.Resposta.id.desc()).limit(10).all()

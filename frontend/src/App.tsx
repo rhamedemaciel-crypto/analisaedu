@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import './App.css';
 import { ProvaUpload } from './components/ProvaUpload';
+import { ListaResultados } from './components/ListaResultados'; // <--- 1. Importação adicionada
 
 function App() {
   const [modo, setModo] = useState<'gabarito' | 'redacao'>('gabarito');
@@ -24,7 +25,14 @@ function App() {
         </button>
       </div>
 
+      {/* Área de Upload */}
       <ProvaUpload modo={modo} />
+
+      {/* Linha divisória para organizar o visual */}
+      <hr style={{ margin: '30px 0', borderColor: '#444' }} />
+
+      {/* Tabela de Resultados (A correcao principal) */}
+      <ListaResultados />
     </div>
   );
 }

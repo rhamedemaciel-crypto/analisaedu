@@ -7,7 +7,6 @@ __pycache__
 # Python (Backend)
 backend/venv/
 backend/uploads/
-*.env
 
 # Node (Frontend - caso tenha)
 node_modules/
